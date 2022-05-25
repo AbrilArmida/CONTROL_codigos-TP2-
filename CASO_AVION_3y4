@@ -1,0 +1,201 @@
+clc; clear all; close all;
+
+%TP - CASO 2 - AVION
+
+%Parametros
+w = 3;
+a = 0.05;
+b = 5;
+c = 100;
+
+
+%Matrices del sistema
+Mat_A = [-a       a    0    0;          %X1 = alpha
+          0       0    1    0;          %X2 = phi
+          w^2   -w^2   0    0;          %X3 = phi_p
+          c       0    0    0];         %X4 = h
+      
+Mat_B = [  0; 
+           0; 
+         b*w^2;                         %entrada velocidad (phi_p)
+           0];
+       
+Mat_C = [0 0 0 1];                      %Salida altura (h)
+
+
+%Calculo del controlador (diseño por Ackermann)
+%Polos dados en la consigna
+p1 = -15+15i;
+p2 = -15-15i;
+p3 = -0.5+0.5i;
+p4 = -0.5-0.5i;
+
+
+%Forma 1 (mas desorganizada)
+% syms p1 p2 p3 p4 s
+% phi = expand((s-p1)*(s-p2)*(s-p3)*(s-p4))
+
+%Forma 2 (mejor organizada)
+a0 = 1;
+a1 = -p1-p2-p3-p4;
+a2 = p1*p2+p1*p3+p1*p4+p2*p3+p2*p4+p3*p4;
+a3 = -p1*p2*p3-p1*p2*p4-p1*p3*p4-p2*p3*p4;
+a4 = p1*p2*p3*p4;
+
+phi_A = a0*Mat_A^4+a1*Mat_A^3+a2*Mat_A^2+a3*Mat_A^1+a4*Mat_A^0;
+
+Mat_M = [Mat_B   Mat_A*Mat_B    Mat_A^2*Mat_B   Mat_A^3*Mat_B];      %Matriz controlabilidad
+K = [0 0 0 1]*inv(Mat_M)*phi_A;                                      %Controlador
+% K = place(Mat_A,Mat_B,[p1;p2;p3;p4])                               %Verificacion
+
+%Referencia distinta de 0 (referencia en 100 y -100)
+G = -inv(Mat_C*inv(Mat_A-Mat_B*K)*Mat_B)
+
+
+%Inciso 4 - Observador
+%Polos de la consigna
+P1_o = -50;             
+P2_o = -30;
+P3_o = -1+i;
+P4_o = -1-i;
+
+%Matrices del observador
+Mat_A_o = Mat_A';
+Mat_B_o = Mat_C';
+Mat_C_o = Mat_B';
+
+Mat_M_Dual = [Mat_B_o  Mat_A_o*Mat_B_o  Mat_A_o^2*Mat_B_o  Mat_A_o^3*Mat_B_o];  %Matriz controlabilidad con dualidad
+                                                                                %debido al observador
+alpha_io = poly([P1_o P2_o P3_o P4_o]);
+poly_A = poly(Mat_A);
+
+Mat_W = [poly_A(4) poly_A(3) poly_A(2) 1;
+         poly_A(3) poly_A(2) 1         0;
+         poly_A(2) 1         0         0;
+         1         0         0         0];
+Mat_T_o = Mat_M_Dual*Mat_W;
+
+K_o = (fliplr(alpha_io(2:end)-poly_A(2:end))*inv(Mat_T_o));         %Controlador observador
+% K_o = place(Mat_A_o,Mat_B_o,[P1_o P2_o P3_o P4_o]);               %Verificacion
+
+
+%Condiciones iniciales del ejercicio            
+%h_i = -500;                            %altura (CASO 1)
+%ref = 100;                             %Referencia (CASO 1)         
+h_i = 500;                              %altura (CASO 2)
+ref = -100;                             %Referencia (CASO 2)
+
+
+%Valores del tiempo para la simulacion
+deltat = 10^-3;
+ts = 70;                      %Tiempo de simulacion
+pasos = ts/deltat;
+t = 0:deltat:(ts-deltat);     %linea temporal
+
+X_i = [0 0 0 h_i];            %Vector con las condiciones iniciales
+
+x = zeros(4,pasos);           %Arreglo de ceros para describir las x iniciales                         
+x(1,1) = X_i(1);              %alpha
+x(2,1) = X_i(2);              %phi
+x(3,1) = X_i(3);              %phi_p
+x(4,1) = X_i(4);              %h
+
+x_so = zeros(4,pasos);        %Arreglo de ceros para describir
+x_so(1,1) = X_i(1);           %las x sin observador (so)
+x_so(2,1) = X_i(2);
+x_so(3,1) = X_i(3);
+x_so(4,1) = X_i(4);
+
+x_hat = zeros(4,pasos);     %Arreglo de ceros para describir
+x_hat(1,1) = 0;             %las x sombrero (del observador)
+x_hat(2,1) = 0;
+x_hat(3,1) = 0;
+x_hat(4,1) = 0;
+
+u(1) = 0;                   %entrada
+u_c(1) = 0;                 %entrada comparada
+
+
+for i=2:1:pasos
+    
+    %Valores de X actuales (a)
+    x_a = x(:,i-1);
+    x_hat_a = x_hat(:,i-1);
+    
+    %Valores de Y actuales (a)
+    y_a = Mat_C*x_a;                      %y_p=C*x
+    y_hat_a = Mat_C*x_hat_a;              %y_h=C*x_h
+    
+    %Error
+    e = y_a-y_hat_a;   
+    
+    %Valores de U actuales (a)
+    u_a = -K(1:3)*x_hat_a(1:3)-K(4)*x_a(4)+ref*G; %Estimo a U con los otros parametros (X(1:3))
+                                                  %y midiendo la altura (X4)
+    u = [u u_a];
+    
+    %Variables X punto 
+    xp_1 = a*(x_a(2)-x_a(1));                  %alpha_p
+    xp_2 = x_a(3);                             %phi_p
+    xp_3 = -w^2*(x_a(2)-x_a(1)-b*u_a);         %phi_pp
+    xp_4 = c*x_a(1);                           %h_p
+    
+    xp_a = [xp_1 ; xp_2 ; xp_3 ; xp_4];       %xp_a = Mat_A*x_a+Mat_B*u_a;
+    xi = x_a+deltat*xp_a;                     %Integracion de Euler
+    x(:,i) = xi;                              %Se actualiza el valor de x
+  
+    %Variables del observador
+    x_hat_p = e*K_o'+Mat_A*x_hat_a+Mat_B*u_a; 
+    x_hat_i = x_hat_a+deltat*x_hat_p;          %Integracion de Euler
+    x_hat(:,i) = x_hat_i;                      %Se actualiza el valor de x_hat
+    
+    %Sistema sin observador (so)
+    x_a_so = x_so(:,i-1);
+    y_so = Mat_C*x_so;
+    u_a_so = -K*x_a_so+ref*G;                 
+    u_c = [u_c u_a_so];
+    
+    %Variables X punto sin observador (so)
+    xsop_1 = a*(x_a_so(2)-x_a_so(1));                  %alpha_so_p
+    xsop_2 = x_a_so(3);                                %phi_so_p
+    xsop_3 = -w^2*(x_a_so(2)-x_a_so(1)-b*u_a_so);      %phi_so_pp
+    xsop_4 = c*x_a_so(1);                              %h_so_p
+    
+    xsop_a = [xsop_1 ; xsop_2 ; xsop_3 ; xsop_4];      %xpso_a = Mat_A*x_a_so+Mat_B*u_a_so;
+    xi_c = x_a_so+deltat*xsop_a;                       %Integracion de Euler
+    x_so(:,i) = xi_c;                                  %Se actualiza el valor de x_so
+    
+end
+
+
+%Graficos
+ref = ref*ones(1,pasos);            %referencia 100/-100 
+figure(1)
+
+% %Graficas sin observador (PUNTO 3)
+% subplot(3,2,1); plot(t,ref,'k'); hold on; plot(t,x_so(4,:),'color', 'b');
+% grid on; title('Altura'); xlabel('Tiempo'); legend({'Real','Referencia'},'Location','southeast')
+% 
+% subplot(3,2,2); plot(t,x_so(1,:),'color','b'); hold on; grid on; title('Alpha'); xlabel('Tiempo'); 
+% 
+% subplot(3,2,3); plot(t,x_so(2,:),'color','b'); hold on; grid on; title('Phi'); xlabel('Tiempo'); 
+% 
+% subplot(3,2,4); plot(t,x_so(3,:),'color','b'); hold on;grid on; title('Phi punto'); xlabel('Tiempo'); 
+% 
+% subplot(3,2,[5,6]); plot(t,u_c,'color','b');hold on; grid on; title('Acción de control'); xlabel('Tiempo'); 
+
+%Graficas con y sin observador (PUNTO 4)
+subplot(3,2,1); plot(t,x(4,:),'color','c'); hold on; plot(t,ref,'k'); plot(t,x_so(4,:),'color', 'b'); 
+grid on; title('Altura'); xlabel('Tiempo'); legend({'Con observador','Referencia','Sin observador'},'Location','southeast')
+
+subplot(3,2,2); plot(t,x(1,:),'color','c'); hold on; plot(t,x_so(1,:),'color','b');
+grid on; title('Alpha'); xlabel('Tiempo'); legend({'Con observador','Sin observador'},'Location','southeast')
+
+subplot(3,2,3); plot(t,x(2,:),'color','c'); hold on; plot(t,x_so(2,:),'color','b');
+grid on; title('Phi'); xlabel('Tiempo'); legend({'Con observador','Sin observador'},'Location','southeast')
+
+subplot(3,2,4); plot(t,x(3,:),'color','c'); hold on; plot(t,x_so(3,:),'color','b');
+grid on; title('Phi punto'); xlabel('Tiempo'); legend({'Con observador','Sin observador'},'Location','southeast')
+
+subplot(3,2,[5,6]); plot(t,u,'color','c'); hold on; plot(t,u_c,'color','b');
+grid on; title('Acción de control'); xlabel('Tiempo'); legend({'Con observador','Sin observador'},'Location','southeast')
